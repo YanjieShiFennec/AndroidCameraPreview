@@ -1,120 +1,177 @@
 package com.example.camerapreview;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.pm.PackageManager;
+import android.graphics.SurfaceTexture;
+import android.hardware.camera2.CameraAccessException;
+import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.params.StreamConfigurationMap;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.PersistableBundle;
-import android.view.View;
-import android.widget.Button;
+import android.util.Log;
+import android.util.Size;
+import android.view.Surface;
+import android.view.TextureView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.camera.core.Camera;
-import androidx.camera.core.CameraSelector;
-import androidx.camera.core.Preview;
-import androidx.camera.lifecycle.ProcessCameraProvider;
-import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
 
-import com.google.common.util.concurrent.ListenableFuture;
-
-import java.util.concurrent.ExecutionException;
+import java.util.Collections;
 
 public class MainActivity extends AppCompatActivity {
-    private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
-    private PreviewView previewView;
-    private Button unbindButton;
-    private Button bindButton;
-    private boolean isBind = false;
-    public static final int PERMISSIONS_REQUEST_CAMERA = 800;
+
+    private static final String TAG = "Camera2Preview";
+    private TextureView textureView;
+    private CameraDevice mCameraDevice;
+    private Size imageDimension;
+    private CaptureRequest.Builder captureRequestBuilder;
+    private CameraCaptureSession cameraCaptureSession;
+    private CaptureRequest captureRequest;
+
 
     @Override
-    protected void onCreate(@Nullable Bundle savedInstanceState) {
+    protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_camera);
-        previewView = findViewById(R.id.previewView);
-        unbindButton = findViewById(R.id.unbind);
-        unbindButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                if (isBind) {
-                    unbind();
-                }
-            }
-        });
-        bindButton = findViewById(R.id.bind);
-        bindButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                if (!isBind) {
-                    try {
-                        ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
-                        bindPreview(cameraProvider);
-                    } catch (ExecutionException | InterruptedException e) {
-                    }
-                }
-            }
-        });
 
-        checkPermission();
+        initPermission(); // 权限申请
+        textureView = findViewById(R.id.texture_view);
+        textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
+                Log.e(TAG, "onSurfaceTextureAvailable");
+                openCamera();
+            }
+
+            @Override
+            public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
+                Log.e(TAG, "onSurfaceTextureSizeChanged");
+            }
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
+                Log.e(TAG, "onSurfaceTextureDestroyed");
+                return false;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {
+                Log.e(TAG, "onSurfaceTextureUpdated");
+            }
+        });
     }
 
-    private void unbind() {
+    // 相机状态变化时会调用这里的回调函数
+    private final CameraDevice.StateCallback stateCallback = new CameraDevice.StateCallback() {
+        @Override
+        public void onOpened(@NonNull CameraDevice camera) {
+            // 相机打开时执行
+            Log.e(TAG, "onOpened");
+            mCameraDevice = camera;
+            // 创建相机预览会话
+            createCameraPreviewSession();
+        }
+
+        @Override
+        public void onDisconnected(@NonNull CameraDevice camera) {
+            //相机链接断开
+        }
+
+        @Override
+        public void onError(@NonNull CameraDevice camera, int error) {
+
+        }
+    };
+
+    private void openCamera() {
+        CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
         try {
-            ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
-            cameraProvider.unbindAll();
-            isBind = false;
-        } catch (ExecutionException | InterruptedException e) {
+            //通过 cameraId 获取 Camera 参数
+            String cameraId = cameraManager.getCameraIdList()[0];
+            CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(cameraId);
+            // 获取支持的分辨率
+            StreamConfigurationMap map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            imageDimension = map.getOutputSizes(SurfaceTexture.class)[0];
+            if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                // TODO: Consider calling
+                //    ActivityCompat#requestPermissions
+                // here to request the missing permissions, and then overriding
+                //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                //                                          int[] grantResults)
+                // to handle the case where the user grants the permission. See the documentation
+                // for ActivityCompat#requestPermissions for more details.
+                return;
+            }
+            cameraManager.openCamera(cameraId, stateCallback, null);
+        } catch (CameraAccessException e) {
+            throw new RuntimeException(e);
         }
     }
 
-    private void checkPermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-                != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, PERMISSIONS_REQUEST_CAMERA);
-        } else {
-            initCameraProviderFuture();
-        }
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == PERMISSIONS_REQUEST_CAMERA) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                initCameraProviderFuture();
-            } else {
-                Toast.makeText(MainActivity.this, "Camera permission is required to take a photo.", Toast.LENGTH_SHORT).show();
+    private boolean initPermission() {
+        ActivityCompat.requestPermissions(MainActivity.this, new String[]{android.Manifest.permission.CAMERA}, 1);
+        // 高版本Android SDK时使用如下代码
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.CAMERA}, 1);
+                return false;
             }
         }
+        return true;
     }
 
-    private void initCameraProviderFuture() {
-        cameraProviderFuture = ProcessCameraProvider.getInstance(this);
-        cameraProviderFuture.addListener(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
-                    bindPreview(cameraProvider);
-                } catch (ExecutionException | InterruptedException e) {
-                }
-            }
-        }, ContextCompat.getMainExecutor(this));
+    private void createCameraPreviewSession() {
+        SurfaceTexture surfaceTexture = textureView.getSurfaceTexture();
+        assert surfaceTexture != null;
+
+        surfaceTexture.setDefaultBufferSize(imageDimension.getWidth(), imageDimension.getHeight());
+        // 预览的输出画面
+        Surface surface = new Surface(surfaceTexture);
+
+        try {
+            // 预览请求
+            captureRequestBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+            captureRequestBuilder.addTarget(surface);
+            mCameraDevice.createCaptureSession(Collections.singletonList(surface),
+                    new CameraCaptureSession.StateCallback() {
+                        @Override
+                        public void onConfigured(@NonNull CameraCaptureSession session) {
+                            if (mCameraDevice == null) {
+                                return;
+                            }
+                            cameraCaptureSession = session;
+                            updatePreview();
+                        }
+
+                        @Override
+                        public void onConfigureFailed(@NonNull CameraCaptureSession session) {
+                            Toast.makeText(MainActivity.this, "Configuration change", Toast.LENGTH_SHORT).show();
+                        }
+                    }, null);
+        } catch (CameraAccessException e) {
+            throw new RuntimeException(e);
+        }
     }
 
-    private void bindPreview(@NonNull ProcessCameraProvider cameraProvider) {
-        Preview preview = new Preview.Builder().build();
-        CameraSelector cameraSelector = new CameraSelector.Builder()
-                .requireLensFacing(CameraSelector.LENS_FACING_BACK)
-                .build();
-        preview.setSurfaceProvider(previewView.getSurfaceProvider());
-        Camera camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview);
-        isBind = true;
+    private void updatePreview() {
+        // 自动聚焦
+        captureRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+
+        captureRequest = captureRequestBuilder.build();
+        try {
+            // 接收连续的帧，用于显示实时预览
+            cameraCaptureSession.setRepeatingRequest(captureRequest, null, null);
+        } catch (CameraAccessException e) {
+            throw new RuntimeException(e);
+        }
     }
 }
+
 
