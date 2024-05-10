@@ -17,6 +17,8 @@ import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
 import android.view.TextureView;
+import android.view.View;
+import android.widget.Button;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -33,7 +35,10 @@ public class MainActivity extends AppCompatActivity {
     private Size imageDimension;
     private CaptureRequest.Builder captureRequestBuilder;
     private CameraCaptureSession cameraCaptureSession;
-    private CaptureRequest captureRequest;
+    private Surface surface;
+    private Button bindButton;
+    private Button unbindButton;
+    private boolean isBind = false;
 
 
     @Override
@@ -42,38 +47,84 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_camera);
 
         initPermission(); // 权限申请
+
+        bindButton = findViewById(R.id.bind);
+        unbindButton = findViewById(R.id.unbind);
+        bindButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                if (isBind) return;
+
+                initTextureView();
+                openCamera();
+            }
+        });
+        unbindButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                if (isBind) {
+                    if (captureRequestBuilder != null) {
+                        captureRequestBuilder.removeTarget(surface);
+                        captureRequestBuilder = null;
+                    }
+                    if (surface != null) {
+                        surface.release();
+                        surface = null;
+                    }
+                    if (cameraCaptureSession != null) {
+                        try {
+                            cameraCaptureSession.stopRepeating();
+                            cameraCaptureSession.abortCaptures();
+                        } catch (CameraAccessException e) {
+                            throw new RuntimeException(e);
+                        }
+                        cameraCaptureSession = null;
+                    }
+                    if (mCameraDevice != null) {
+                        mCameraDevice.close();
+                        mCameraDevice = null;
+                    }
+                    isBind = false;
+                }
+            }
+        });
+
+        initTextureView();
+    }
+
+    private void initTextureView(){
         textureView = findViewById(R.id.texture_view);
         textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override
             public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
-                Log.e(TAG, "onSurfaceTextureAvailable");
+                Log.i(TAG, "onSurfaceTextureAvailable");
                 openCamera();
             }
 
             @Override
             public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
-                Log.e(TAG, "onSurfaceTextureSizeChanged");
+                Log.i(TAG, "onSurfaceTextureSizeChanged");
             }
 
             @Override
             public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
-                Log.e(TAG, "onSurfaceTextureDestroyed");
+                Log.i(TAG, "onSurfaceTextureDestroyed");
                 return false;
             }
 
             @Override
             public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {
-                Log.e(TAG, "onSurfaceTextureUpdated");
+                // Log.i(TAG, "onSurfaceTextureUpdated");
             }
         });
     }
 
-    // 相机状态变化时会调用这里的回调函数
+    // 相机状态监听
     private final CameraDevice.StateCallback stateCallback = new CameraDevice.StateCallback() {
         @Override
         public void onOpened(@NonNull CameraDevice camera) {
             // 相机打开时执行
-            Log.e(TAG, "onOpened");
+            Log.i(TAG, "onOpened");
             mCameraDevice = camera;
             // 创建相机预览会话
             createCameraPreviewSession();
@@ -81,7 +132,7 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public void onDisconnected(@NonNull CameraDevice camera) {
-            //相机链接断开
+            // 相机断开
         }
 
         @Override
@@ -91,10 +142,12 @@ public class MainActivity extends AppCompatActivity {
     };
 
     private void openCamera() {
+        // 获取 CameraManager 实例
         CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
         try {
-            //通过 cameraId 获取 Camera 参数
+            // 获取第一个相机 ID
             String cameraId = cameraManager.getCameraIdList()[0];
+            // 通过 cameraId 获取 Camera 参数
             CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(cameraId);
             // 获取支持的分辨率
             StreamConfigurationMap map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
@@ -107,9 +160,12 @@ public class MainActivity extends AppCompatActivity {
                 //                                          int[] grantResults)
                 // to handle the case where the user grants the permission. See the documentation
                 // for ActivityCompat#requestPermissions for more details.
+
+                // requestPermissions(new String[]{Manifest.permission.CAMERA}, 0);
                 return;
             }
             cameraManager.openCamera(cameraId, stateCallback, null);
+            isBind = true;
         } catch (CameraAccessException e) {
             throw new RuntimeException(e);
         }
@@ -117,7 +173,7 @@ public class MainActivity extends AppCompatActivity {
 
     private boolean initPermission() {
         ActivityCompat.requestPermissions(MainActivity.this, new String[]{android.Manifest.permission.CAMERA}, 1);
-        // 高版本Android SDK时使用如下代码
+        // 高版本 Android SDK 时使用如下代码
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(new String[]{Manifest.permission.CAMERA}, 1);
@@ -133,21 +189,30 @@ public class MainActivity extends AppCompatActivity {
 
         surfaceTexture.setDefaultBufferSize(imageDimension.getWidth(), imageDimension.getHeight());
         // 预览的输出画面
-        Surface surface = new Surface(surfaceTexture);
+        surface = new Surface(surfaceTexture);
 
         try {
             // 预览请求
             captureRequestBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
             captureRequestBuilder.addTarget(surface);
+            // 自动聚焦
+            captureRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+            // 创建会话
             mCameraDevice.createCaptureSession(Collections.singletonList(surface),
                     new CameraCaptureSession.StateCallback() {
+                        // 会话的状态监听
                         @Override
                         public void onConfigured(@NonNull CameraCaptureSession session) {
                             if (mCameraDevice == null) {
                                 return;
                             }
+
                             cameraCaptureSession = session;
-                            updatePreview();
+                            try {
+                                cameraCaptureSession.setRepeatingRequest(captureRequestBuilder.build(), null, null);
+                            } catch (CameraAccessException e) {
+                                throw new RuntimeException(e);
+                            }
                         }
 
                         @Override
@@ -155,19 +220,6 @@ public class MainActivity extends AppCompatActivity {
                             Toast.makeText(MainActivity.this, "Configuration change", Toast.LENGTH_SHORT).show();
                         }
                     }, null);
-        } catch (CameraAccessException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private void updatePreview() {
-        // 自动聚焦
-        captureRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-
-        captureRequest = captureRequestBuilder.build();
-        try {
-            // 接收连续的帧，用于显示实时预览
-            cameraCaptureSession.setRepeatingRequest(captureRequest, null, null);
         } catch (CameraAccessException e) {
             throw new RuntimeException(e);
         }
