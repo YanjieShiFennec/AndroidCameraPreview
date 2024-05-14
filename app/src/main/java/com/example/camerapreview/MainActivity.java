@@ -3,6 +3,7 @@ package com.example.camerapreview;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -11,7 +12,6 @@ import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.StreamConfigurationMap;
-import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.util.Size;
@@ -25,20 +25,26 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "Camera2Preview";
+    public static final int PERMISSIONS_REQUEST_CAMERA = 100;
     private TextureView textureView;
     private CameraDevice mCameraDevice;
     private Size imageDimension;
     private CaptureRequest.Builder captureRequestBuilder;
     private CameraCaptureSession cameraCaptureSession;
     private Surface surface;
-    private Button bindButton;
-    private Button unbindButton;
+    private int textureViewWidth;
+    private int textureViewHeight;
     private boolean isBind = false;
+    private boolean isFirstStart = true;
 
 
     @Override
@@ -47,57 +53,80 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_camera);
 
         initPermission(); // 权限申请
+        initTextureView();
 
-        bindButton = findViewById(R.id.bind);
-        unbindButton = findViewById(R.id.unbind);
+        Button bindButton = findViewById(R.id.bind);
+        Button unbindButton = findViewById(R.id.unbind);
         bindButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                if (isBind) return;
-
-                initTextureView();
-                openCamera();
+                if (!isBind) {
+                    openCamera();
+                }
             }
         });
         unbindButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 if (isBind) {
-                    if (captureRequestBuilder != null) {
-                        captureRequestBuilder.removeTarget(surface);
-                        captureRequestBuilder = null;
-                    }
-                    if (surface != null) {
-                        surface.release();
-                        surface = null;
-                    }
-                    if (cameraCaptureSession != null) {
-                        try {
-                            cameraCaptureSession.stopRepeating();
-                            cameraCaptureSession.abortCaptures();
-                        } catch (CameraAccessException e) {
-                            throw new RuntimeException(e);
-                        }
-                        cameraCaptureSession = null;
-                    }
-                    if (mCameraDevice != null) {
-                        mCameraDevice.close();
-                        mCameraDevice = null;
-                    }
-                    isBind = false;
+                    releasePreview();
                 }
             }
         });
-
-        initTextureView();
     }
 
-    private void initTextureView(){
+    private void initPermission() {
+        if (checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, PERMISSIONS_REQUEST_CAMERA);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        switch (requestCode) {
+            case PERMISSIONS_REQUEST_CAMERA:
+                if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    openCamera();
+                } else {
+                    Toast.makeText(MainActivity.this, "Camera permission is required to take a photo.", Toast.LENGTH_SHORT).show();
+                }
+                break;
+            default:
+        }
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (isFirstStart) {
+            // 打开应用时不启动相机
+            isFirstStart = false;
+        } else {
+            openCamera();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        releasePreview();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        releasePreview();
+    }
+
+    private void initTextureView() {
         textureView = findViewById(R.id.texture_view);
         textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override
             public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
                 Log.i(TAG, "onSurfaceTextureAvailable");
+                textureViewWidth = width;
+                textureViewHeight = height;
                 openCamera();
             }
 
@@ -117,6 +146,32 @@ public class MainActivity extends AppCompatActivity {
                 // Log.i(TAG, "onSurfaceTextureUpdated");
             }
         });
+    }
+
+    private void releasePreview() {
+        if (captureRequestBuilder != null) {
+            captureRequestBuilder.removeTarget(surface);
+            captureRequestBuilder = null;
+        }
+        if (surface != null) {
+            surface.release();
+            surface = null;
+        }
+        if (cameraCaptureSession != null) {
+            try {
+                cameraCaptureSession.stopRepeating();
+                cameraCaptureSession.abortCaptures();
+            } catch (CameraAccessException e) {
+                throw new RuntimeException(e);
+            }
+            cameraCaptureSession = null;
+        }
+        if (mCameraDevice != null) {
+            mCameraDevice.close();
+            mCameraDevice = null;
+        }
+
+        isBind = false;
     }
 
     // 相机状态监听
@@ -151,36 +206,85 @@ public class MainActivity extends AppCompatActivity {
             CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(cameraId);
             // 获取支持的分辨率
             StreamConfigurationMap map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-            imageDimension = map.getOutputSizes(SurfaceTexture.class)[0];
-            if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                // TODO: Consider calling
-                //    ActivityCompat#requestPermissions
-                // here to request the missing permissions, and then overriding
-                //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-                //                                          int[] grantResults)
-                // to handle the case where the user grants the permission. See the documentation
-                // for ActivityCompat#requestPermissions for more details.
+            Size[] outputSizes = map.getOutputSizes(SurfaceTexture.class);
+            imageDimension = getOptimalSize(outputSizes);
 
-                // requestPermissions(new String[]{Manifest.permission.CAMERA}, 0);
+            int viewWidth = imageDimension.getWidth();
+            int viewHeight = imageDimension.getHeight();
+            if (viewWidth > viewHeight) {
+                // swap
+                viewWidth ^= viewHeight;
+                viewHeight ^= viewWidth;
+                viewWidth ^= viewHeight;
+            }
+
+            float widthRatio = (float) viewWidth / textureViewWidth;
+            float heightRatio = (float) viewHeight / textureViewHeight;
+            if (widthRatio > heightRatio) {
+                // outputView 放大时宽先占满屏幕或缩小时高先占满屏幕
+                viewHeight = textureViewWidth * viewHeight / viewWidth;
+                viewWidth = textureViewWidth;
+            } else {
+                // outputView 放大时高先占满屏幕或缩小时宽先占满屏幕
+                viewWidth = textureViewHeight * viewWidth / viewHeight;
+                viewHeight = textureViewHeight;
+            }
+
+            Matrix matrix = new Matrix();
+            // 将 outputView 和 textureView 中心点重合
+            matrix.preTranslate((float) (textureViewWidth - viewWidth) / 2,
+                    (float) (textureViewHeight - viewHeight) / 2);
+            // 缩放
+            matrix.preScale((float) viewWidth / textureViewWidth,
+                    (float) viewHeight / textureViewHeight);
+            // 设置要与此纹理视图关联的转换。指定的转换适用于基础表面纹理，不会影响视图本身的大小或位置，仅影响其内容。
+            textureView.setTransform(matrix);
+
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
                 return;
             }
             cameraManager.openCamera(cameraId, stateCallback, null);
+
             isBind = true;
         } catch (CameraAccessException e) {
             throw new RuntimeException(e);
         }
     }
 
-    private boolean initPermission() {
-        ActivityCompat.requestPermissions(MainActivity.this, new String[]{android.Manifest.permission.CAMERA}, 1);
-        // 高版本 Android SDK 时使用如下代码
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{Manifest.permission.CAMERA}, 1);
-                return false;
+    private Size getOptimalSize(Size[] outputSizes) {
+        Size tempSize;
+        List<Size> sizes = new ArrayList<>();
+        for (Size outputSize : outputSizes) {
+            if (textureViewWidth > textureViewHeight) {
+                // 横屏
+                if (outputSize.getHeight() > textureViewHeight && outputSize.getWidth() > textureViewWidth) {
+                    sizes.add(outputSize);
+                }
+            } else {
+                // 竖屏
+                if (outputSize.getWidth() > textureViewHeight && outputSize.getHeight() > textureViewWidth) {
+                    sizes.add(outputSize);
+                }
             }
         }
-        return true;
+
+        if (!sizes.isEmpty()) {
+            // 如果有多个符合条件找到一个差距最小的，最接近预览分辨率的
+            tempSize = sizes.get(0);
+            int minnum = 999999;
+            for (Size size : sizes) {
+                int num = size.getHeight() * size.getHeight() - textureViewWidth * textureViewHeight;
+                if (num < minnum) {
+                    minnum = num;
+                    tempSize = size;
+                }
+            }
+        } else {
+            // outputView 分辨率小于 textureView 时选取最大的 size
+            Comparator<Size> comparator = Comparator.comparingInt(size -> size.getWidth() * size.getHeight());
+            tempSize = Collections.max(Arrays.asList(outputSizes), comparator);
+        }
+        return tempSize;
     }
 
     private void createCameraPreviewSession() {
