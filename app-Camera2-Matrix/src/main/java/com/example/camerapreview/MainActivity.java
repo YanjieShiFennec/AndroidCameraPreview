@@ -103,7 +103,9 @@ public class MainActivity extends AppCompatActivity {
             // 打开应用时不启动相机
             isFirstStart = false;
         } else {
-            openCamera();
+            if (!isBind) {
+                openCamera();
+            }
         }
     }
 
