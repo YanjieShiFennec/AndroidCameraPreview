@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 rootProject.name = "CameraPreview"
 include ':app-Camera2-Matrix'
 include ':app-CameraX'
+include ':app-Camera2-TextureView'
